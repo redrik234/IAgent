@@ -11,7 +11,6 @@ class Manager:
     # === Данные по картам ===
     __map_nums = []  # номера карт
     __attempts_count = 5  # количество попыток на одн карту
-    __total_games_count = 10  # общее количество игр
 
     # === Параметры обучения агента===
     __alpha = 0  # фактор обучения
@@ -25,6 +24,7 @@ class Manager:
     __wins_count = 0
     __score_count = 0
     __lost_map_list = []
+    __total_games_count = 0  # общее количество игр
 
     # === Конструктор менеджера игр ===
     # session_data = [user_id, case_id, tournament_id, hash_id]
@@ -38,12 +38,18 @@ class Manager:
 
         self.__map_nums = map_data[0]
         self.__attempts_count = map_data[1]
-        self.__total_games_count = map_data[2]
+        # self.__total_games_count = map_data[2]
 
         self.__alpha = nnet_data[0]
         self.__gamma = nnet_data[1]
         self.__delta = nnet_data[2]
         self.__batch_size = nnet_data[3]
+
+    def get_user_id(self):
+        return self.__user_id
+
+    def get_case_id(self):
+        return self.__case_id
 
     # === Метод для обучения интеллектуального агента ===
     def train(self, agent, iter_count=1):
@@ -62,15 +68,22 @@ class Manager:
             win_rate = (self.__wins_count * 100) / self.__games_count
             score_rate = self.__score_count / self.__games_count
             self.__print_overall_result(win_rate, score_rate)
-            agent.save_nnet()
+            agent.__saveNnet__()
 
     def __play(self, agent, iteration):
         random.shuffle(self.__map_nums)
         for map_num in range(len(self.__map_nums)):
             for attempt_num in range(1, self.__attempts_count + 1):
                 hash_id, map_id = self.__get_hash_and_map(map_num)
-                # TODO дописать параметры метода вызова агента
-                code, score = agent.playGame()
+
+                code, score = agent.playGame(
+                    map_id,
+                    self.__alpha,
+                    self.__gamma,
+                    self.__batch_size,
+                    self.__tournament_id,
+                    self.__hash_id
+                )
                 if code is None:
                     print("Connection failed for: map = {0}, attempt = {1}".format(map_id, attempt_num))
                 else:
@@ -85,10 +98,9 @@ class Manager:
         return agent
 
     def __print_overall_result(self, win_rate, score_rate):
-        games_info = "*Games: ", self.__games_count
-        win_info = "*Win rate: {:6.2f}, Score rate: {:6.2f}" . format(win_rate, score_rate)
-        lost_info = "*Lost Game Maps: ".join(self.__lost_map_list)
-        str_length = 0
+        games_info = "* Games: " + str(self.__games_count)
+        win_info = "* Win rate: {:6.2f}, Score rate: {:6.2f}" . format(win_rate, score_rate)
+        lost_info = "* Lost Game Maps: " + ', '.join(str(e) for e in self.__lost_map_list)
         if len(win_info) > len(lost_info):
             str_length = len(win_info) + 1
         else:
@@ -104,7 +116,7 @@ class Manager:
         print('*' * (str_length + 1))
 
     def __print_game_result(self, map_num, attempt_num, iteration):
-        print('*' * 100)
+        print('*' * 80)
         if self.__tournament_id == 0:
             print(
                 "map_num: ", map_num + 1,
@@ -120,7 +132,7 @@ class Manager:
                 ", alpha = {:8.6f}".format(self.__alpha)
             )
 
-        print('*' * 100)
+        print('*' * 80)
 
     def __print_beginning_of_games(self, iter_count):
         print('=' * 80)

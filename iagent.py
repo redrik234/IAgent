@@ -116,8 +116,8 @@ class IAgent:
         return request_code, curr_score
 
     # создать или загрузить нейросеть
-    def __createNnet__(self, nnet_parms):
-        self.nnet = functions.openNnet(nnet_parms)
+    def __createNnet__(self, nnet_params):
+        self.nnet = functions.openNnet(nnet_params)
 
     # сохранить нейросеть
     def __saveNnet__(self):
@@ -128,6 +128,7 @@ class IAgent:
     :param percept: полученное текущее восприятие ситуации
     :return: хэш, символьная строка, кодирующая ситуацию
     """
+        # в отдельное состояние стена/не стена, известная/не изветсная,
         is_monster_alive = str(int(percept["worldinfo"]["ismonsteralive"]))
         newcaveopenedQ = len(percept["iagent"]["knowCaves"])
         # !!!!!!!!!!! ----- ONLY FOR 4x4 ------- !!!!!!!!!!!!
@@ -223,9 +224,7 @@ class IAgent:
 
     # преобразуем символьный хэш в числовой входной вектор для нейросети
     def __hash2vec__(self, curr_hash):
-        vec = np.zeros(len(curr_hash))
-        #print(curr_hash)
-        #print(vec)
+        vec = np.array(curr_hash)
         return vec
 
     # строит вектор one-hot в зависимости от выбранного действия (100000000 - для 'take')

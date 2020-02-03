@@ -1,11 +1,12 @@
 #! /usr/bin/python3
 
-import requests as req
-import urllib3
-
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 import numpy as np
 import pickle
+import tensorflow as tf
+from tensorflow import keras
+import requests as req
+import urllib3
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # работа с сервером ===========================================================
 
@@ -86,6 +87,7 @@ def openNnet(nnet_parms):
         model = readNnet(file_name)
         print('model загружена из ', file_name)
     except:
+
         inp_N = nnet_parms[1]
         hidden_N = nnet_parms[2]
         out_N = nnet_parms[3]
@@ -98,9 +100,16 @@ def openNnet(nnet_parms):
 # inp_N, hidden_N out_N - кол-во нейронов во входном, скрытом и выходном слоях
 # выход: объект класса, хранящий всю информацию для расчета нейросети
 def createNnet(inp_N, hidden_N, out_N):
-    model = {}
-    model['W1'] = np.random.randn(hidden_N, inp_N) / np.sqrt(inp_N)
-    model['W2'] = np.random.randn(out_N, hidden_N) / np.sqrt(hidden_N)
+    model = keras.Sequential([
+        keras.layers.Input(shape=(inp_N,)),
+        keras.layers.Dense(hidden_N, activation='relu'),
+        keras.layers.Dense(out_N, activation='sigmoid')
+    ])
+    model.compile(
+        optimizer='adam',
+        loss='sparse_categorical_crossentropy',
+        metrics=['accuracy']
+    )
     return model
 
 

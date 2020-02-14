@@ -9,15 +9,28 @@ class IAgent:
     case_id = None
 
     nnet = None
+    rmsprop_cache = None
+    grad_buffer = None
 
     prev_act = None
     prev_score = None
     prev_hash = None
     prev_weights_dict = None
+    decay_rate = 0.9
 
-    xs, hs, dlogps, drs = [], [], [], []
+    alpha = 0.02
+    gamma = 0.65
+    delta = 0.0001
+    batch_size = 10  # 20
+    help_degree = 0.75
+    dropout = 0.5
+    #  xs, hs, dlogps, drs = [], [], [], []
+    xs, hs, h2s, errs, zs, rs = [], [], [], [], [], []
+    a_xs, a_hs, a_h2s, a_zerrs = [], [], [], []
 
     episode = pd.DataFrame(columns=['hash_s', 'act', 'reward', 'hash_news'])
+
+    gamesQ = 0
 
     all_acts_dict = {
         "none": ["noAct", "noAct"], "take": ["noAct", "Take"],
@@ -43,6 +56,11 @@ class IAgent:
     def __init__(self, nnet_parms):
         self.__createNnet__(nnet_parms)
         self.nnetfileName = nnet_parms[0]
+        self.grad_buffer = self.nnet
+        self.rmsprop_cache = self.nnet
+        for k, v in self.nnet.items():
+            self.grad_buffer[k] = np.zeros_like(v)
+        self.rmsprop_cache[k] = np.zeros_like(v)
 
     def set_user_id(self, user_id):
         self.user_id = user_id
@@ -50,7 +68,8 @@ class IAgent:
     def set_case_id(self, case_id):
         self.case_id = case_id
 
-    def playGame(self, map_num, alpha, gamma, batch_size=10, tid=0, hashid=0):
+    def playGame(self, map_num, gamesQ, tid=0, hashid=0):
+        self.gamesQ = gamesQ
         request_code = None  # код завершения хода
         curr_score = None  # набранные очки
 
@@ -76,12 +95,14 @@ class IAgent:
 
             # начинаем игру
             while request_error == None:  # пока никакой ошибки нет (нет завершения игры)
+                curr_act = None
                 if request != None:
                     ''' # выбираем для текущего состояния ход, если состояние новое, то добавляем его в базу 
           политики (полезностей) +4 записи; корректируем кол-во новых полей в базе данных   '''
                     curr_act = self.__chooseAct__(curr_hash)
                     acts = self.all_acts_dict[curr_act]
-                    # запоминаем набранное до выбранного хода кол-во очков и хэш текущего состояния s, выбранное действие
+                    #  запоминаем набранное до выбранного хода кол-во очков
+                    #  и хэш текущего состояния s, выбранное действие
                     self.prev_score = curr_score
                     self.prev_hash = curr_hash
                     self.prev_act = curr_act
@@ -98,6 +119,8 @@ class IAgent:
 
                     curr_hash = self.__getHash__(percept)
 
+                    reward = curr_score - self.prev_score
+                    self.rs.append(reward)
                     # дополнение таблицы ходов для запоминания игры (эпизода) информацией о новом ходе
                     rec = {'hash_s': [self.prev_hash], 'act': [curr_act], 'reward': [curr_score - self.prev_score],
                            'hash_news': [curr_hash]}
@@ -107,13 +130,15 @@ class IAgent:
                     # обновление полезности последнего хода и обучение нейросети
                     if request_code in [0, 1, 2]:  # игра завершилась, обучение агента
                         self.episode.index = list(range(self.episode.shape[0]))
-                        self.__update_nnet__(alpha=alpha, gamma=gamma, batch_size=batch_size)
+                        self.__update_nnet__()
                         print('------ Код завершения = ', self.fin_codes[request_code], ' --------')
 
                 else:
                     print("WARNING! Server was not responded.")
 
-        return request_code, curr_score
+        if self.gamesQ % 100 == 1 and self.help_degree > 0.25:
+            self.help_degree -= 0.01
+        return request_code, curr_score, self.gamesQ
 
     # создать или загрузить нейросеть
     def __createNnet__(self, nnet_params):
@@ -159,6 +184,9 @@ class IAgent:
         res = res + behind_right_cave_state + back_cave_state + behind_left_cave_state + left_cave_state
 
         return res
+
+    def get_help_degree(self):
+        return self.help_degree
 
     # подправить искусственно веса, используя состояние пещеры
     # weights - np.array весов: weights = np.array(curr_weights_row[1:])
@@ -224,8 +252,8 @@ class IAgent:
 
     # преобразуем символьный хэш в числовой входной вектор для нейросети
     def __hash2vec__(self, curr_hash):
-        vec = np.array(curr_hash)
-        return vec
+        ch_list = list(map(lambda x: float(x), curr_hash))
+        return np.asarray(ch_list)
 
     # строит вектор one-hot в зависимости от выбранного действия (100000000 - для 'take')
     def __y_to_yvec__(self, curr_act):
@@ -240,15 +268,20 @@ class IAgent:
     # выбираем для текущего состояния c curr_hash ход,
     # если состояние новое, то добавляем его в базу политики (полезностей) +4
     def __chooseAct__(self, curr_hash):
-        # colnames = ["hash", "take", "go_forward", "go_right", "go_back", "go_left", "shoot_forward", "shoot_right", "shoot_back", "shoot_left"]
+        #  colnames = ["hash", "take", "go_forward", "go_right", "go_back", "go_left", "shoot_forward", "shoot_right", "shoot_back", "shoot_left"]
         x = self.__hash2vec__(curr_hash)
         # расчет выхода нейросети
         ynet, h = functions.policy_forward(self.nnet, x)
 
-        curr_weights = ynet
+        # ynet = ynet[0]
 
+        if rnd.random() < self.help_degree:
+            weights = list(self.__correctWeights__(np.array(ynet), curr_hash))
+        else:
+            weights = list(ynet)
+        # curr_weights = ynet
         # корректируем веса для очевидных случаев
-        weights = list(self.__correctWeights__(np.array(curr_weights), curr_hash))
+
         weights.insert(0, curr_hash)
         curr_weights_row = tuple(weights)
 
@@ -263,14 +296,14 @@ class IAgent:
         self.xs.append(x)  # observation
         self.hs.append(h)  # hidden state
         yvec = self.__y_to_yvec__(curr_act)
-        self.dlogps.append(yvec - ynet)  # grad that encourages the action that was taken to be take
+        self.errs.append(yvec - ynet)  # grad that encourages the action that was taken to be take
 
         return curr_act
 
     def __discount_rewards__(self, r, gamma):
         """ take 1D float array of rewards and compute discounted reward """
-        discounted_r = np.zeros_like(r)
-        running_add = 0
+        discounted_r = np.zeros_like(r) * 1.0
+        running_add = 0.0
         for t in reversed(range(0, r.size)):
             running_add = running_add * gamma + r[t]
             discounted_r[t] = running_add
@@ -278,7 +311,7 @@ class IAgent:
 
     # -----------------------------------------------------------------------------------------
     # -------------- обучение нейросети на результатах завершившейся игры ---------------------
-    def __update_nnet__(self, alpha, gamma, batch_size=10):
+    def __update_nnet__(self):
         """
     обновление полезности всех сделанных ходов после завершения одной игры
     :param self.episode: содержит результаты всех ходов в иде кортежа (hash_s, act, reward, hash_news)
@@ -286,17 +319,36 @@ class IAgent:
     :param gamma: и с параметром дисконта
     :return: обновление базы данных или Q-таблицы
     """
-        # рассчитываем дисконтированный бонус для каждого хода в игре
-        r = self.episode['reward']
-        discounted_r = self.__discount_rewards__(r, gamma)
+        a_xs = np.vstack(self.xs)
+        a_hs = np.vstack(self.hs)
+        a_errs = np.vstack(self.errs)
+        a_rs = np.vstack(self.rs)
 
-        # нормируем дисконтированные веса
-        # standardize the rewards to be unit normal (helps control the gradient estimator variance)
-        discounted_r -= np.mean(discounted_r)
+        self.xs, self.hs, self.errs, self.rs = [], [], [], []
+        discounted_r = self.__discount_rewards__(a_rs, self.gamma)
         discounted_r /= np.std(discounted_r)
+        a_zerrs = a_errs * discounted_r
 
-        for actnum in range(self.episode.shape[0]):
-            # ...
-            if (actnum + 1) % batch_size == 0:
-                # организуем корректировку весов нейросети для очередного пакета
-                pass
+        if self.gamesQ % self.batch_size == 1:  # начинаем накапливать информацию о новом пакете игр
+            self.a_xs = a_xs.copy()
+            self.a_hs = a_hs.copy()
+            self.a_zerrs = a_zerrs.copy()
+
+        else:
+            self.a_xs.extend(a_xs)
+            self.a_hs.extend(a_hs)
+            self.a_zerrs.extend(a_zerrs)
+            #  self.a_hs = np.append(self.a_hs, a_hs)
+            #  self.a_zerrs = np.append(self.a_zerrs, a_zerrs)
+        grad_w = functions.policy_backward_bias(model=self.nnet, a_xs=a_xs, a_hs=a_hs, a_zerrs=a_zerrs)
+        # update buffers that add up gradients over a batch
+
+        for k in self.nnet:
+            self.grad_buffer[k] += grad_w[k]  # accumulate grad over batch
+
+        if self.gamesQ % self.batch_size == 0:  # корректировка весов - метод rmsprop
+            for k, v in self.nnet.items():
+                g = self.grad_buffer[k]  # gradient
+                self.rmsprop_cache[k] = self.decay_rate * self.rmsprop_cache[k] + (1 - self.decay_rate) * g ** 2
+                self.nnet[k] += self.alpha * g / (np.sqrt(self.rmsprop_cache[k]) + 1e-5)
+                self.grad_buffer[k] = np.zeros_like(v)  # reset batch gradient buffer

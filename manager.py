@@ -1,5 +1,5 @@
 import random
-
+import os
 
 class Manager:
     # === Данные сессии ===
@@ -25,6 +25,7 @@ class Manager:
     __score_count = 0
     __lost_map_list = []
     __total_games_count = 0  # общее количество игр
+    __gamesQ = 0
 
     # === Конструктор менеджера игр ===
     # session_data = [user_id, case_id, tournament_id, hash_id]
@@ -67,23 +68,14 @@ class Manager:
             self.__total_games_count += self.__games_count
             win_rate = (self.__wins_count * 100) / self.__games_count
             score_rate = self.__score_count / self.__games_count
-            self.__print_overall_result(win_rate, score_rate)
-            agent.__saveNnet__()
+            self.__print_overall_result(win_rate, score_rate, agent.get_help_degree())
 
     def __play(self, agent, iteration):
         random.shuffle(self.__map_nums)
         for map_num in range(len(self.__map_nums)):
             for attempt_num in range(1, self.__attempts_count + 1):
                 hash_id, map_id = self.__get_hash_and_map(map_num)
-
-                code, score = agent.playGame(
-                    map_id,
-                    self.__alpha,
-                    self.__gamma,
-                    self.__batch_size,
-                    self.__tournament_id,
-                    self.__hash_id
-                )
+                code, score, self.__gamesQ = agent.playGame(map_id, self.__gamesQ, self.__tournament_id, self.__hash_id)
                 if code is None:
                     print("Connection failed for: map = {0}, attempt = {1}".format(map_id, attempt_num))
                 else:
@@ -94,10 +86,12 @@ class Manager:
                 self.__alpha -= self.__delta
                 if self.__alpha < 0.01:
                     self.__alpha = 0.01
+                agent.__saveNnet__()
+            #agent.update_nnet(self.__alpha, self.__gamma, self.__batch_size)
 
         return agent
 
-    def __print_overall_result(self, win_rate, score_rate):
+    def __print_overall_result(self, win_rate, score_rate, help_degree):
         games_info = "* Games: " + str(self.__games_count)
         win_info = "* Win rate: {:6.2f}, Score rate: {:6.2f}" . format(win_rate, score_rate)
         lost_info = "* Lost Game Maps: " + ', '.join(str(e) for e in self.__lost_map_list)
@@ -115,6 +109,15 @@ class Manager:
         print(lost_info + s)
         print('*' * (str_length + 1))
 
+        f = open('log.txt', 'a')
+        f.write('*' * (str_length + 1) + '\n')
+        f.write(f"* Games: {self.__games_count}, CaseId: {self.__case_id} \n")
+        f.write(f"* Win rate: {win_rate}, Score rate: {score_rate} \n")
+        f.write("* Lost Game Maps: " + ', '.join(str(e) for e in self.__lost_map_list))
+        f.write(f"help_degree:{help_degree}")
+        f.write('\n' + '*' * (str_length + 1) + '\n')
+        f.close()
+
     def __print_game_result(self, map_num, attempt_num, iteration):
         print('*' * 80)
         if self.__tournament_id == 0:
@@ -131,8 +134,6 @@ class Manager:
                 ", wins=", self.__wins_count,
                 ", alpha = {:8.6f}".format(self.__alpha)
             )
-
-        print('*' * 80)
 
     def __print_beginning_of_games(self, iter_count):
         print('=' * 80)

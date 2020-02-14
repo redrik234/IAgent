@@ -1,9 +1,8 @@
 #! /usr/bin/python3
+from json import JSONDecodeError
 
 import numpy as np
 import pickle
-import tensorflow as tf
-from tensorflow import keras
 import requests as req
 import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -55,7 +54,11 @@ def connectToServer(user_id, case_id, map_num, acts=['noAct', 'noAct'], tid=0, h
     json = None
     if resp.status_code == 200:
         # print("----- соединение установлено -----")
-        json = resp.json()
+        try:
+            json = resp.json()
+        except JSONDecodeError as e:
+            print(json)
+            print(e.msg)
     return json
 
 
@@ -100,16 +103,19 @@ def openNnet(nnet_parms):
 # inp_N, hidden_N out_N - кол-во нейронов во входном, скрытом и выходном слоях
 # выход: объект класса, хранящий всю информацию для расчета нейросети
 def createNnet(inp_N, hidden_N, out_N):
-    model = keras.Sequential([
-        keras.layers.Input(shape=(inp_N,)),
-        keras.layers.Dense(hidden_N, activation='relu'),
-        keras.layers.Dense(out_N, activation='sigmoid')
-    ])
-    model.compile(
-        optimizer='adam',
-        loss='sparse_categorical_crossentropy',
-        metrics=['accuracy']
-    )
+    # model = keras.Sequential()
+    # model.add(keras.layers.Dense(40, activation="relu", input_shape=(40, ), name='input'))
+    # model.add(keras.layers.Dense(168, activation="relu", name="hidden"))
+    # model.add(keras.layers.Dense(9, activation="sigmoid", name='output'))
+    # model.compile(
+    #     optimizer='adam',
+    #     loss='mean_squared_error',
+    #     metrics=['accuracy']
+    # ) #  sparse_categorical_crossentropy
+
+    model = {}
+    model['W1'] = np.random.randn(hidden_N, inp_N) / np.sqrt(inp_N)
+    model['W2'] = np.random.randn(out_N, hidden_N) / np.sqrt(hidden_N)
     return model
 
 
@@ -135,19 +141,45 @@ def discount_rewards(r, gamma):
     return discounted_r
 
 
-def policy_forward(model, x):
-    # np.reshape(x, (39))
-    h = np.dot(model['W1'], x)
+def policy_forward(model, state):
+    h = np.dot(model['W1'], state)
     h[h < 0] = 0  # ReLU nonlinearity
     logp = np.dot(model['W2'], h)
     p = sigmoid(logp)
-    return p, h  # return probability of taking action 2, and hidden state
+    return p, h
 
 
-def policy_backward(model, epx, eph, epdlogp):
-    """ backward pass. (eph is array of intermediate hidden states) """
-    dW2 = np.dot(eph.T, epdlogp).ravel()
-    dh = np.outer(epdlogp, model['W2'])
-    dh[eph <= 0] = 0  # backpro prelu
-    dW1 = np.dot(dh.T, epx)
+def policy_backward_bias(model, a_xs, a_hs, a_zerrs):
+    dW2 = np.dot(a_zerrs.T, a_hs)
+    dh = np.dot(a_zerrs, model['W2'])
+    dh[a_hs <= 0] = 0  # backpro prelu
+    dW1 = np.dot(dh.T, a_xs)
     return {'W1': dW1, 'W2': dW2}
+
+
+def policy_backward(model, a_xs, a_hs, a_zerrs):
+    """ backward pass. (eph is array of intermediate hidden states)
+     a_xs - is array of nnet input
+     a_hs - is array of intermediate hidden states
+     a_zerrs - is array of z - errors, multiplied on discount_r
+     """
+    #  zerrs = (Ynet^-1 + Yval(hot-vector)) * discount_r
+
+    print(a_zerrs)
+    a_hs = np.vstack(a_hs)
+    dw2 = np.dot(a_zerrs.T, a_hs).ravel()
+    print(dw2)
+    dh = np.dot(a_zerrs, np.array(model.get_layer('output').get_weights()[0]))
+    print('dh=%', dh)
+    dh = relu(dh)
+    print(np.array(dh).shape)
+    dw1 = np.dot(dh.T, a_xs)
+    return {'input': dw1, 'hidden': dw2}
+
+
+def relu(x):
+    x[x < 0] = 0
+    return x
+
+# help_degree выбрасывааем монету нужно ли корректировывать веса
+# 6 caseid самый простой
